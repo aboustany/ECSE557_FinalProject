@@ -1,6 +1,6 @@
 import java.util.ArrayList;
 
-class RequestHistory {
+public class RequestHistory {
   private ArrayList<String> requestHistory;
 
   public RequestHistory() {

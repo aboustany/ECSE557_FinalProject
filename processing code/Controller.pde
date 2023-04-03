@@ -4,109 +4,144 @@ import java.util.Collections;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.Scanner;
 
 class Controller {
 
     Scenario scene = Scenario.instance();
+    
     Character robot;
+    Configurations config;
 
     private long secondDelay;
     
-    private RequestHistory history;
+    RequestHistory history;
 
     Controller() {
         robot = scene.getRobot();
+        config = scene.getConfig();
+        history = new RequestHistory();
     }
 
-    public void command(Character requester, Item item, Entity receiver){
+public boolean command(Character requester, Item item, Entity receiver) {
+    // Print the list of registered users
+    System.out.println(config.getUserList());
 
+    // Update the status with the command request
+    updateStatus(String.format("COMMAND: [%s] asks the robot to bring [%s] to [%s]", requester.name, item.name, receiver.name));
 
-        // REQUESTER asks the robot to fetch ITEM and bring it to RECEIVER
-        // requester := a Character
-        // item := an interactable objec
-        // reciever := a Room or Character to bring the item to
+    // Get the room where the item is located and determine the final room based on the type of receiver
+    Room fetchRoom = getRoomItemIsIn(item);
+    Room finalRoom = determineFinalRoom(receiver);
 
-        // print command request
-        updateStatus("COMMAND: "+"["+requester.name+"] asks the robot to bring ["+item.name+"] to ["+receiver.name+"]");
-        Room fetchRoom = getRoomItemIsIn(item);
-        Room finalRoom;
-        println("command called with");
-        println(requester);
-        println(item);
-        println(receiver);
+    // Print the command parameters
+    println("command called with", requester, item, receiver);
 
-        // gets destination room. If the destination is a character, gets the room the character is in.
-        if(receiver instanceof Room){
-            int age = requester.getAge();
-            receiver = (Room) receiver;
-            
-            if(item.getAgeRestriction() <= age){
-               finalRoom = getCurrentRobotRoom();
-               updateStatus("Requester cannot process request due to item age restriction. (Requester Underage)");
-            }
-            
-            else if( receiver.isBlacklistedItem(item)){
-               finalRoom = getCurrentRobotRoom();
-               updateStatus("Unable to process request due blacklisted Item. (Room Blacklist)" );
-            }
-          
-            else finalRoom = (Room)receiver;
-            updateStatus("Request Approved");
-   
-        }
-        else if (receiver instanceof Character){
-             
-            receiver = (Character) receiver;
-            
-            if(item.getAgeRestriction() <= requester.getAge()){
-               finalRoom = getCurrentRobotRoom();
-               updateStatus("Unable to process request due to item age restriction. (Requester Underage)");
-            }
-            
-            else if(item.getAgeRestriction() <= receiver.getAge()){
-               finalRoom = getCurrentRobotRoom();
-               updateStatus("Unable to process request due to item age restriction. (Receiver Underage)");
-            }
-            
-            else if(receiver.isBlacklistedItem(item) || getRoomCharacterIsIn((Character)receiver).isBlacklistedItem(item)){
-               finalRoom = getCurrentRobotRoom();
-               updateStatus("Unable to process request due blacklisted Item. (Receiver Blacklist)");
+    // Check if the receiver is a room and if there are child restrictions on the item
+    boolean isReceiverRoom = receiver instanceof Room;
+    boolean childRestricted = config.isChildSafeItemRestriction() && !config.isItemInChildSafeItemList(item);
 
-            }
-            
-            else finalRoom = getRoomCharacterIsIn((Character)receiver);
-             updateStatus("Request Approved");
+    // Check for restrictions
+    String restrictionMessage = checkRestrictions(requester, item, receiver, isReceiverRoom, childRestricted);
 
-            
-        }
-        
-        else if(requester.isBlacklistedItem(item)){
-              finalRoom = getCurrentRobotRoom();
-              updateStatus("Unable to process request due blacklisted Item. (Requester Blacklist)");
-         }
-        
-        else{
-            finalRoom = getCurrentRobotRoom();
-            updateStatus("Reciever is of an invalid type");
-        }
-        
-        
-        
-        
-        
-        //check requests if user is restricted from item.
-        
-        
-        
-        
-        String entry = String.format("Current requester: %s sent current target: %s to current receiver: %s  with the following message: %s",  
-        requester, item, receiver); //HAVE SOME WAY TO RETURN STATUS MESSAGE??
-        history.addRequest(entry);
+    // Process the request
+    boolean success = processRequest(requester, item, isReceiverRoom, childRestricted, restrictionMessage);
 
-        // moves the robot from current room -> item location -> reciever location
+    // Log the request
+    logRequest(requester, item, receiver);
+
+    // Execute the fetch procedure if the request was successful
+    if (success) {
         FetchProcedureAsync(item, fetchRoom, finalRoom, receiver);
-                
     }
+   
+    return success;
+}
+
+// Determine the final room based on the type of receiver
+private Room determineFinalRoom(Entity receiver) {
+    return receiver instanceof Room ? (Room) receiver : getRoomCharacterIsIn((Character) receiver);
+}
+
+// Check for restrictions
+private String checkRestrictions(Character requester, Item item, Entity receiver, boolean isReceiverRoom, boolean childRestricted) {
+    String restrictionMessage = null;
+
+    if (childRestricted && (config.isCharacterInUnder12List(requester) || config.isCharacterInUnder12List((Character) receiver))) {
+        restrictionMessage = "Robot cannot process request due to item child restriction. (%s Underage)";
+    } else if (config.isAgeRestriction() && (config.isItemInAgeRestrictedItemList(item) && (config.isCharacterInAgeRestrictedList(requester) || config.isCharacterInAgeRestrictedList((Character) receiver)))) {
+        restrictionMessage = "Robot cannot process request due to item age restriction. (%s Age Restricted)";
+    } else if (isReceiverRoom && ((Room) receiver).isBlacklistedItem(item)) {
+        restrictionMessage = "Unable to process request due blacklisted Item. (Room Blacklist)";
+    } else if (!isReceiverRoom && (requester.isBlacklistedItem(item) || ((Character) receiver).isBlacklistedItem(item))) {
+        restrictionMessage = "Unable to process request due blacklisted Item. (%s Blacklist)";
+    } else if (item.getRisk() == Item.Risk.HIGH && !config.isHighRiskItemManipulation()) {
+        restrictionMessage = "Robot cannot process request due to item risk level restriction. (High Risk Item Manipulation Restricted)";
+    } else if (item.getRisk() == Item.Risk.MEDIUM && !config.isMediumRiskItemManipulation()) {
+        restrictionMessage = "Robot cannot process request due to item risk level restriction. (Medium Risk Level Manipulation Restricted)";
+    }
+
+    return restrictionMessage;
+}
+
+
+
+// Process the request
+private boolean processRequest(Character requester, Item item, boolean isReceiverRoom, boolean childRestricted, String restrictionMessage) {
+    boolean success = false;
+
+    if (restrictionMessage == null) {
+        // All conditions are met, and the request is approved
+        success = true;
+        updateStatus("Request Approved");
+    } else {
+        // There are restrictions, and the request is denied
+        Room finalRoom = getCurrentRobotRoom();
+        String userStatus = config.isCharacterInUnder12List(requester) || requester.isBlacklistedItem(item) ? "Requester" : "Receiver";
+        updateStatus(String.format(restrictionMessage, userStatus));
+
+        // Check for admin override
+        if (config.isAdminOverride() && config.isCharacterInAdministratorList(requester)) {
+          
+          System.out.println("Admin Override Detected. Would you like to proceed with the task anyways? (Y/N)");
+          Scanner scanner = new Scanner(System.in);
+          String userInput = scanner.nextLine();
+
+
+        if (userInput.equalsIgnoreCase("Y")) {
+            // Admin override approved
+            success = true;
+            updateStatus("Admin Override Approved");
+        }
+    }
+}
+
+    // Check if requester is a registered user, and if unregistered users can make requests
+    if (!config.isCharacterInUserList(requester)) {
+        if (config.isUnregisteredUserRequest() && config.isItemInGuestItemList(item)) {
+            // Request is approved for unregistered users
+            success = true;
+            updateStatus("Request Approved");
+        } else {
+            // Request is denied for unregistered users
+            success = false;
+            updateStatus("Request Denied: Requester is not a registered user.");
+        }
+    }
+
+  return success;
+}
+
+// Log the request
+private void logRequest(Character requester, Item item, Entity receiver) {
+  String entry = String.format("Current requester: %s sent current target: %s to current receiver: %s with the following message:", requester, item, receiver);
+  if (config.isKeepHistory() && history != null) {
+    // Add the request to the history
+    history.addRequest(entry);
+  }
+}
+
+
 
 public void FetchProcedureAsync(Item item, Room fetchRoom, Room finalRoom, Entity receiver){
 
@@ -303,7 +338,9 @@ public void FetchProcedureAsync(Item item, Room fetchRoom, Room finalRoom, Entit
     }
 
     private void updateStatus(String msg){
-        if(gui != null) gui.updateTerminal(msg);
+        if(gui != null) {
+          gui.updateTerminal(msg);
+        }
         println(msg);
     }
 

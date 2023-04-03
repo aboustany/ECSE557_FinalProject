@@ -30,6 +30,11 @@ class GUI {
 
     private UIState uiState; 
     
+    private int errorTimer = 0;
+    private boolean showError = false;
+
+   
+    
 
     GUI(){
 
@@ -51,20 +56,34 @@ class GUI {
     }
 
     void update(Controller controller){
-        fill(c_dark);
-        rect(0, height-CONSOLE_HEIGHT, width, CONSOLE_HEIGHT);
-
-        switch (uiState) {
-            case INPUT:
-                renderInputMenu();
-                break;
-            default:
-                renderTerminalFeedback();
-                break;
-        }
-    }
+      fill(c_dark);
+      rect(0, height-CONSOLE_HEIGHT, width, CONSOLE_HEIGHT);
+  
+      if (showError) {
+          // If there's an error, show it for 60 frames
+          if (errorTimer < 60) {
+              renderError();
+              errorTimer++;
+          } else {
+              showError = false;
+              errorTimer = 0;
+          }
+      } else {
+          switch (uiState) {
+              case INPUT:
+                  renderInputMenu();
+                  break;
+              default:
+                  renderTerminalFeedback();
+                  break;
+          }
+      }
+}
 
     private void renderInputMenu(){
+      
+       boolean commandSuccess = false;
+       
             if(Button(currentRequester, MARGIN_LEFT, BUTTONLINE_YPOS, BUTTON_WIDTH, BUTTON_HEIGHT)){
                 String selection = new UiBooster().showSelectionDialog(
                                                                         "Select requester:",
@@ -105,27 +124,40 @@ class GUI {
             };
 
             if(Button("> Execute", 
-                    width - BUTTON_WIDTH - MARGIN_LEFT, 
-                    BUTTONLINE_YPOS, 
-                    BUTTON_WIDTH, 
-                    BUTTON_HEIGHT)){
-                println("current requester: "+this.currentRequester);
-                println("current target: "+this.currentTarget);
-                println("current rec: "+this.currentReceiver);
+        width - BUTTON_WIDTH - MARGIN_LEFT, 
+        BUTTONLINE_YPOS, 
+        BUTTON_WIDTH, 
+        BUTTON_HEIGHT)){
+          println("current requester: "+this.currentRequester);
+          println("current target: "+this.currentTarget);
+          println("current rec: "+this.currentReceiver);
+      
+          println("current receiver:");
+      
+          Entity destination = Scenario.instance().characters.get(this.currentReceiver);
+      
+          if(destination == null){
+              destination = Scenario.instance().rooms.get(this.currentReceiver);
+          }
+      
+          commandSuccess = controller.command(Scenario.instance().characters.get(this.currentRequester), 
+                          Scenario.instance().items.get(this.currentTarget), 
+                          destination);
+      
+          if(!commandSuccess) {
+              showError = true;
+              // Reset current selections to default values
+              currentRequester = "Amy Copper";
+              currentTarget = "Credit Card";
+              currentReceiver = "Jill Smith";
+          } else {
+              toggleState();
+          }
+      };
 
-                println("current receiver:");
-
-                Entity destination = Scenario.instance().characters.get(this.currentReceiver);
-                
-                if(destination == null){
-                    destination = Scenario.instance().rooms.get(this.currentReceiver);
-                }
-
-                controller.command(Scenario.instance().characters.get(this.currentRequester), 
-                                Scenario.instance().items.get(this.currentTarget), 
-                                destination);
-                toggleState();
-            };
+            
+       // RESET UI IF COMMAND IS UNSUCCESSFUL
+            
     }
 
     public void renderTerminalFeedback(){
@@ -153,4 +185,12 @@ class GUI {
         if (this.uiState == UIState.INPUT) this.uiState = UIState.FEEDBACK;
         else this.uiState = UIState.INPUT;
     }
+    
+    // added to render error
+    public void renderError() {
+      fill(255, 0, 0);
+      textSize(20);
+      textAlign(CENTER, CENTER);
+      text("Request refused, please check console." , width/2, height-100);
+  }
 }
